@@ -1,3 +1,5 @@
+import random
+import time
 import concurrent.futures
 import requests
 import streamlit as st
@@ -5,41 +7,46 @@ import streamlit as st
 st.set_page_config(page_title="Gmail Checker By Sfvck", layout="wide")
 
 st.title("🛡️ Gmail Checker By Sfvck")
-st.markdown("Masukkan daftar email, bot akan mengecek statusnya via HTTP API server.")
+st.markdown("Masukkan daftar email, bot akan mengecek statusnya via API dengan proteksi anti-captcha.")
 
 email_input_text = st.text_area("Daftar Email (1 email per baris):", height=150, placeholder="contoh1@gmail.com\ncontoh2@gmail.com")
 
 def check_email_api(email):
-    # Endpoint check account Google via Web API
     url = "https://accounts.google.com/_/signin/username"
     
+    # Rotasi User-Agent agar tidak terdeteksi sebagai bot tunggal
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
+    ]
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": random.choice(user_agents),
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "Accept": "*/*"
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+        "Referer": "https://accounts.google.com/"
     }
     
-    # Format payload request Google Signin
     payload = f"entry=1&continue=https%3A%2F%2Fwww.google.com%2F&f.req=%5B%null%2C%5B%22{email}%22%5D%5D"
     
     try:
-        response = requests.post(url, headers=headers, data=payload, timeout=10)
+        # Berikan jeda acak sebentar agar mirip jeda ketik manusia (mencegah rate-limit Google)
+        time.sleep(random.uniform(1.5, 3.5))
+        
+        response = requests.post(url, headers=headers, data=payload, timeout=15)
         res_text = response.text
         
-        # Analisis respons teks dari server Google
-        if "data-ved" in res_text or "rc=" in res_text or "identifier" in res_text:
-            if "bukan akun" in res_text.lower() or "tidak dapat menemukan" in res_text.lower() or "Couldn't find" in res_text:
-                return email, "Tidak Ditemukan"
-            else:
-                return email, "Dapat Login"
-        elif "cha" in res_text.lower() or "captcha" in res_text.lower():
+        # Deteksi status berdasarkan respons Google
+        if "cha" in res_text.lower() or "recaptcha" in res_text.lower() or "challenge" in res_text.lower():
             return email, "Captcha"
+        elif "bukan akun" in res_text.lower() or "tidak dapat menemukan" in res_text.lower() or "Couldn't find" in res_text:
+            return email, "Tidak Ditemukan"
+        elif "data-ved" in res_text or "rc=" in res_text or email.lower() in res_text.lower():
+            return email, "Dapat Login"
         else:
-            # Jika respons mengindikasikan akun valid/lanjut ke password
-            if email.lower() in res_text.lower():
-                return email, "Dapat Login"
-            else:
-                return email, "Tidak Ditemukan"
+            return email, "Tidak Ditemukan"
                 
     except Exception as e:
         return email, "Tidak Ditemukan"
@@ -50,7 +57,7 @@ if st.button("Mulai Cek Email", type="primary"):
     if not emails_list:
         st.warning("Harap masukkan setidaknya satu email!")
     else:
-        st.info(f"Total {len(emails_list)} email dimuat. Memproses via API...")
+        st.info(f"Total {len(emails_list)} email dimuat. Memproses dengan jeda anti-captcha...")
         
         results = {"Dapat Login": [], "Captcha": [], "Tidak Ditemukan": []}
         progress_bar = st.progress(0)
@@ -59,8 +66,8 @@ if st.button("Mulai Cek Email", type="primary"):
         total = len(emails_list)
         completed = 0
         
-        # Menggunakan ThreadPoolExecutor agar pengecekan berjalan cepat secara paralel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # Mengurangi jumlah worker paralel (max_workers=2) agar IP cloud tidak terdeteksi spam oleh Google
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             future_to_email = {executor.submit(check_email_api, email): email for email in emails_list}
             
             for future in concurrent.futures.as_completed(future_to_email):
