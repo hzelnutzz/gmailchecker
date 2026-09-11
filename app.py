@@ -8,7 +8,6 @@ st.title("🛡️ Gmail Checker By Sfvck")
 st.markdown("Masukkan daftar email, bot akan mengecek statusnya secara otomatis.")
 
 st.sidebar.header("Pengaturan Bot")
-# Di server cloud, mode headless wajib Aktif (True)
 headless_mode = st.sidebar.checkbox("Mode Headless (Wajib True untuk Cloud)", value=True)
 
 email_input_text = st.text_area("Daftar Email (1 email per baris):", height=150, placeholder="contoh1@gmail.com\ncontoh2@gmail.com")
@@ -21,6 +20,7 @@ def run_checker_sync(emails, headless):
     total = len(emails)
     
     with sync_playwright() as p:
+        # Otomatis mengunduh/menjalankan chromium di server cloud
         browser = p.chromium.launch(
             headless=headless,
             args=[
