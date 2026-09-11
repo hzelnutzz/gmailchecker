@@ -1,83 +1,48 @@
-import time
+import concurrent.futures
+import requests
 import streamlit as st
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 
 st.set_page_config(page_title="Gmail Checker By Sfvck", layout="wide")
 
 st.title("🛡️ Gmail Checker By Sfvck")
-st.markdown("Masukkan daftar email, bot akan mengecek statusnya secara otomatis.")
-
-st.sidebar.header("Pengaturan Bot")
-headless_mode = st.sidebar.checkbox("Mode Headless (Wajib True untuk Cloud)", value=True)
+st.markdown("Masukkan daftar email, bot akan mengecek statusnya via HTTP API server.")
 
 email_input_text = st.text_area("Daftar Email (1 email per baris):", height=150, placeholder="contoh1@gmail.com\ncontoh2@gmail.com")
 
-def run_checker_selenium(emails, headless):
-    results = {"Dapat Login": [], "Captcha": [], "Tidak Ditemukan": []}
+def check_email_api(email):
+    # Endpoint check account Google via Web API
+    url = "https://accounts.google.com/_/signin/username"
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    total = len(emails)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Accept": "*/*"
+    }
     
-    options = Options()
-    if headless:
-        options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-    
-    # Inisialisasi driver Selenium dengan WebDriver Manager (otomatis pasang driver di cloud)
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
+    # Format payload request Google Signin
+    payload = f"entry=1&continue=https%3A%2F%2Fwww.google.com%2F&f.req=%5B%null%2C%5B%22{email}%22%5D%5D"
     
     try:
-        for index, email in enumerate(emails):
-            status_text.text(f"Memproses ({index+1}/{total}): {email}")
-            result_status = "Tidak Ditemukan"
-            
-            try:
-                driver.get("https://accounts.google.com/")
-                time.sleep(3)
-                
-                # Cari kotak input email
-                email_input = driver.find_element(By.NAME, "identifier")
-                email_input.clear()
-                email_input.send_keys(email)
-                email_input.send_keys(Keys.RETURN)
-                time.sleep(4)
-                
-                page_source = driver.page_source.lower()
-                current_url = driver.current_url.lower()
-                
-                if "captch" in page_source or "challenge" in current_url:
-                    result_status = "Captcha"
-                elif "password" in page_source or len(driver.find_elements(By.NAME, "Passwd")) > 0:
-                    result_status = "Dapat Login"
-                elif "Couldn't find your Google Account" in driver.page_source or "tidak dapat menemukan" in page_source:
-                    result_status = "Tidak Ditemukan"
-                else:
-                    if "oops" in page_source or "rejected" in current_url:
-                        result_status = "Tidak Ditemukan"
-                    else:
-                        result_status = "Dapat Login"
-                        
-            except Exception as e:
-                result_status = "Tidak Ditemukan"
-                
-            results[result_status].append(email)
-            progress_bar.progress((index + 1) / total)
-            
-    finally:
-        driver.quit()
+        response = requests.post(url, headers=headers, data=payload, timeout=10)
+        res_text = response.text
         
-    return results
+        # Analisis respons teks dari server Google
+        if "data-ved" in res_text or "rc=" in res_text or "identifier" in res_text:
+            if "bukan akun" in res_text.lower() or "tidak dapat menemukan" in res_text.lower() or "Couldn't find" in res_text:
+                return email, "Tidak Ditemukan"
+            else:
+                return email, "Dapat Login"
+        elif "cha" in res_text.lower() or "captcha" in res_text.lower():
+            return email, "Captcha"
+        else:
+            # Jika respons mengindikasikan akun valid/lanjut ke password
+            if email.lower() in res_text.lower():
+                return email, "Dapat Login"
+            else:
+                return email, "Tidak Ditemukan"
+                
+    except Exception as e:
+        return email, "Tidak Ditemukan"
 
 if st.button("Mulai Cek Email", type="primary"):
     emails_list = [e.strip() for e in email_input_text.split("\n") if e.strip()]
@@ -85,10 +50,30 @@ if st.button("Mulai Cek Email", type="primary"):
     if not emails_list:
         st.warning("Harap masukkan setidaknya satu email!")
     else:
-        st.info(f"Total {len(emails_list)} email dimuat. Memulai pengecekan...")
+        st.info(f"Total {len(emails_list)} email dimuat. Memproses via API...")
         
-        results = run_checker_selenium(emails_list, headless_mode)
+        results = {"Dapat Login": [], "Captcha": [], "Tidak Ditemukan": []}
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
+        total = len(emails_list)
+        completed = 0
+        
+        # Menggunakan ThreadPoolExecutor agar pengecekan berjalan cepat secara paralel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_email = {executor.submit(check_email_api, email): email for email in emails_list}
+            
+            for future in concurrent.futures.as_completed(future_to_email):
+                email, status = future.result()
+                completed += 1
+                progress_bar.progress(completed / total)
+                status_text.text(f"Memproses ({completed}/{total}): {email}")
+                
+                if status in results:
+                    results[status].append(email)
+                else:
+                    results["Tidak Ditemukan"].append(email)
+                    
         st.success("Pengecekan Selesai!")
         
         st.session_state['res_login'] = "\n".join(results["Dapat Login"])
