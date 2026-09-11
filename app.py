@@ -1,15 +1,11 @@
-import os
-import subprocess
 import time
 import streamlit as st
-
-# Otomatis install playwright browser jika berjalan di server cloud (Streamlit Cloud)
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    subprocess.run(["pip", "install", "playwright"])
-    subprocess.run(["playwright", "install", "chromium"])
-    from playwright.sync_api import sync_playwright
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 
 st.set_page_config(page_title="Gmail Checker By Sfvck", layout="wide")
 
@@ -21,55 +17,53 @@ headless_mode = st.sidebar.checkbox("Mode Headless (Wajib True untuk Cloud)", va
 
 email_input_text = st.text_area("Daftar Email (1 email per baris):", height=150, placeholder="contoh1@gmail.com\ncontoh2@gmail.com")
 
-def run_checker_sync(emails, headless):
+def run_checker_selenium(emails, headless):
     results = {"Dapat Login": [], "Captcha": [], "Tidak Ditemukan": []}
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     total = len(emails)
     
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-infobars",
-                "--disable-dev-shm-usage",
-                "--disable-gpu"
-            ]
-        )
-        
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
-        
+    options = Options()
+    if headless:
+        options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+    
+    # Inisialisasi driver Selenium dengan WebDriver Manager (otomatis pasang driver di cloud)
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    
+    try:
         for index, email in enumerate(emails):
             status_text.text(f"Memproses ({index+1}/{total}): {email}")
             result_status = "Tidak Ditemukan"
             
             try:
-                page.goto("https://accounts.google.com/", timeout=60000)
+                driver.get("https://accounts.google.com/")
+                time.sleep(3)
                 
-                input_selector = "input[name='identifier']"
-                page.wait_for_selector(input_selector, timeout=10000)
+                # Cari kotak input email
+                email_input = driver.find_element(By.NAME, "identifier")
+                email_input.clear()
+                email_input.send_keys(email)
+                email_input.send_keys(Keys.RETURN)
+                time.sleep(4)
                 
-                page.fill(input_selector, email)
-                page.keyboard.press("Enter")
-                page.wait_for_timeout(4000)
+                page_source = driver.page_source.lower()
+                current_url = driver.current_url.lower()
                 
-                content = page.content()
-                url = page.url
-                
-                if "captch" in content.lower() or "recaptcha" in content.lower() or "challenge" in url:
+                if "captch" in page_source or "challenge" in current_url:
                     result_status = "Captcha"
-                elif "password" in content.lower() or page.query_selector("input[name='Passwd']") or page.query_selector("input[type='password']"):
+                elif "password" in page_source or len(driver.find_elements(By.NAME, "Passwd")) > 0:
                     result_status = "Dapat Login"
-                elif "Couldn't find your Google Account" in content or "tidak dapat menemukan" in content.lower():
+                elif "Couldn't find your Google Account" in driver.page_source or "tidak dapat menemukan" in page_source:
                     result_status = "Tidak Ditemukan"
                 else:
-                    if "oops" in content.lower() or "rejected" in url:
+                    if "oops" in page_source or "rejected" in current_url:
                         result_status = "Tidak Ditemukan"
                     else:
                         result_status = "Dapat Login"
@@ -80,7 +74,8 @@ def run_checker_sync(emails, headless):
             results[result_status].append(email)
             progress_bar.progress((index + 1) / total)
             
-        browser.close()
+    finally:
+        driver.quit()
         
     return results
 
@@ -92,7 +87,7 @@ if st.button("Mulai Cek Email", type="primary"):
     else:
         st.info(f"Total {len(emails_list)} email dimuat. Memulai pengecekan...")
         
-        results = run_checker_sync(emails_list, headless_mode)
+        results = run_checker_selenium(emails_list, headless_mode)
         
         st.success("Pengecekan Selesai!")
         
