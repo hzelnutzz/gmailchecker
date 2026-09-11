@@ -1,6 +1,15 @@
+import os
+import subprocess
 import time
 import streamlit as st
-from playwright.sync_api import sync_playwright
+
+# Otomatis install playwright browser jika berjalan di server cloud (Streamlit Cloud)
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    subprocess.run(["pip", "install", "playwright"])
+    subprocess.run(["playwright", "install", "chromium"])
+    from playwright.sync_api import sync_playwright
 
 st.set_page_config(page_title="Gmail Checker By Sfvck", layout="wide")
 
@@ -20,7 +29,6 @@ def run_checker_sync(emails, headless):
     total = len(emails)
     
     with sync_playwright() as p:
-        # Otomatis mengunduh/menjalankan chromium di server cloud
         browser = p.chromium.launch(
             headless=headless,
             args=[
